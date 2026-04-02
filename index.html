@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>霍尔木兹海峡实时监控 | Strait of Hormuz Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0f172a',
+                        accent: '#3b82f6',
+                        danger: '#ef4444',
+                        positive: '#22c55e',
+                        warning: '#f59e0b',
+                        surface: '#1e293b',
+                        'surface-2': '#334155',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f172a;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+        .card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            transition: border-color 0.2s;
+        }
+        .card:hover {
+            border-color: #475569;
+        }
+        .stat-value {
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.02em;
+        }
+        .pulse-dot {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .spinner {
+            border: 2px solid #334155;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .tradingview-chart-widget .tradingview-widget-container { height: 100%; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen">
+
+    <!-- Header -->
+    <header class="border-b border-gray-700/50 bg-primary/80 backdrop-blur-sm sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-3 sm:px-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                    <div class="flex items-center gap-3">
+                        <h1 class="text-xl sm:text-2xl font-bold text-white tracking-tight">霍尔木兹海峡实时监控</h1>
+                        <span id="statusBadge" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-700 text-gray-400">
+                            <span class="pulse-dot w-2 h-2 rounded-full bg-gray-400"></span>
+                            加载中...
+                        </span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-0.5" id="lastUpdate">--</p>
+                </div>
+                <button onclick="loadData()" id="refreshBtn"
+                    class="px-4 py-2 bg-accent hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 self-start sm:self-auto">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    刷新数据
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 space-y-6">
+
+        <!-- Section 1: Status + Key Metrics -->
+        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <!-- Hero: latest transit count (spans 2 cols on mobile) -->
+            <div class="card p-5 border-l-4 col-span-2 sm:col-span-1 lg:col-span-2" id="transitStatusCard" style="border-left-color:#64748b;">
+                <p class="text-xs text-gray-400 uppercase tracking-wider mb-2">最近日通行量</p>
+                <div class="flex items-baseline gap-2">
+                    <p id="heroTotal" class="stat-value text-4xl font-black text-white leading-none"><span class="spinner"></span></p>
+                    <span class="text-sm text-gray-500">艘</span>
+                </div>
+                <div class="mt-3 pt-2 border-t border-gray-700/30 grid grid-cols-2 gap-x-4 text-xs">
+                    <div>
+                        <span class="text-gray-500">90日均值</span>
+                        <p id="heroHistAvg" class="font-mono text-gray-300 mt-0.5">--</p>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">偏离度</span>
+                        <p id="heroDeviation" class="font-mono font-semibold mt-0.5">--</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card p-4">
+                <p class="text-xs text-gray-400 mb-1">7日均值</p>
+                <p id="metricTotal" class="stat-value text-2xl font-bold text-white"><span class="spinner"></span></p>
+                <p class="text-xs text-gray-500 mt-1">7-Day Avg</p>
+            </div>
+            <div class="card p-4">
+                <p class="text-xs text-gray-400 mb-1">油轮数</p>
+                <p id="metricTankerCount" class="stat-value text-2xl font-bold text-warning"><span class="spinner"></span></p>
+                <p class="text-xs text-gray-500 mt-1">Tankers Today</p>
+            </div>
+            <div class="card p-4">
+                <p class="text-xs text-gray-400 mb-1">油轮占比</p>
+                <p id="metricTankerPct" class="stat-value text-2xl font-bold text-warning"><span class="spinner"></span></p>
+                <p class="text-xs text-gray-500 mt-1">Tanker Share</p>
+            </div>
+            <div class="card p-4">
+                <p class="text-xs text-gray-400 mb-1">运力 (DWT)</p>
+                <p id="metricCapacity" class="stat-value text-2xl font-bold text-accent"><span class="spinner"></span></p>
+                <p class="text-xs text-gray-500 mt-1">Deadweight</p>
+            </div>
+        </section>
+
+        <!-- Section 3: Transit Trend Chart -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-4">每日通行量趋势 (90天)
+                <span class="text-xs text-gray-500 font-normal ml-2">Daily Transit Volume</span>
+            </h2>
+            <div class="relative" style="height:320px;">
+                <canvas id="transitChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Section 4: Ship Type + Capacity -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="card p-5">
+                <h2 class="text-base font-semibold text-white mb-4">船型分布
+                    <span class="text-xs text-gray-500 font-normal ml-2">Vessel Type Breakdown</span>
+                </h2>
+                <div class="flex items-center justify-center" style="height:280px;">
+                    <canvas id="shipTypeChart"></canvas>
+                </div>
+            </div>
+            <div class="card p-5">
+                <h2 class="text-base font-semibold text-white mb-4">运力趋势 (DWT)
+                    <span class="text-xs text-gray-500 font-normal ml-2">Capacity Trend</span>
+                </h2>
+                <div class="relative" style="height:280px;">
+                    <canvas id="capacityChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 5: Live Ship Map -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-4">实时船舶位置
+                <span class="text-xs text-gray-500 font-normal ml-2">Live Vessel Positions</span>
+            </h2>
+            <div class="rounded-lg overflow-hidden border border-gray-700/50" style="height:500px;">
+                <iframe
+                    id="marineFrame"
+                    src="https://www.marinetraffic.com/en/ais/embed/zoom:10/centery:26.5/centerx:56.3/maptype:4/shownames:false/mmsi:0/shipid:0/fleet:/fleet_id:/vtypes:/showmenu:/remember:false"
+                    width="100%" height="100%" frameborder="0" loading="lazy"
+                    style="border:0"
+                    onerror="this.style.display='none';document.getElementById('mapFallback').style.display='flex';"
+                ></iframe>
+                <div id="mapFallback" class="hidden items-center justify-center h-full bg-surface text-gray-400">
+                    <div class="text-center">
+                        <p class="mb-2">地图加载失败</p>
+                        <a href="https://www.marinetraffic.com/en/ais/home/centerx:56.3/centery:26.5/zoom:10"
+                           target="_blank" class="text-accent hover:underline text-sm">
+                            在 MarineTraffic 中查看 &rarr;
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 6: Oil Price Widget -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-4">国际油价走势
+                <span class="text-xs text-gray-500 font-normal ml-2">Brent Crude Oil</span>
+            </h2>
+            <div class="tradingview-chart-widget rounded-lg overflow-hidden" style="height:400px;">
+                <div class="tradingview-widget-container">
+                    <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 7: Global Chokepoint Comparison -->
+        <section class="card p-5">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-1">
+                <h2 class="text-base font-semibold text-white">全球咽喉点通行对比
+                    <span class="text-xs text-gray-500 font-normal ml-2">Global Chokepoint Comparison</span>
+                </h2>
+                <div class="flex gap-1 mt-2 sm:mt-0" id="cmpDayBtns">
+                    <button data-days="30" class="px-3 py-1 text-xs rounded-md bg-gray-700/50 text-gray-400 hover:bg-gray-600/50 transition-colors">30天</button>
+                    <button data-days="60" class="px-3 py-1 text-xs rounded-md bg-gray-700/50 text-gray-400 hover:bg-gray-600/50 transition-colors">60天</button>
+                    <button data-days="90" class="px-3 py-1 text-xs rounded-md bg-accent text-white">90天</button>
+                </div>
+            </div>
+            <p class="text-xs text-gray-500 mb-4">霍尔木兹 vs 苏伊士 vs 曼德海峡 vs 马六甲 vs 好望角</p>
+            <div class="relative" style="height:340px;">
+                <canvas id="chokepointCompareChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Section 8: YoY Transit Comparison -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-1">同比通行量变化
+                <span class="text-xs text-gray-500 font-normal ml-2">Year-over-Year Transit Volume</span>
+            </h2>
+            <p class="text-xs text-gray-500 mb-4">今年 vs 去年同期 — 量化危机冲击程度</p>
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">今年30日均值</p>
+                    <p id="yoyCurrentAvg" class="stat-value text-xl font-bold text-white"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">去年同期30日均值</p>
+                    <p id="yoyLastYearAvg" class="stat-value text-xl font-bold text-white"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">同比变化</p>
+                    <p id="yoyChange" class="stat-value text-xl font-bold"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">运力同比变化</p>
+                    <p id="yoyCapChange" class="stat-value text-xl font-bold"><span class="spinner"></span></p>
+                </div>
+            </div>
+            <div class="relative" style="height:300px;">
+                <canvas id="yoyChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Section 9: Ship Type Trend (Stacked Area) -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-1">船型结构变化趋势 (90天)
+                <span class="text-xs text-gray-500 font-normal ml-2">Vessel Type Composition Trend</span>
+            </h2>
+            <p class="text-xs text-gray-500 mb-4">各船型占比随时间变化 — 反映制裁/封锁对不同船型的影响</p>
+            <div class="relative" style="height:320px;">
+                <canvas id="shipTypeTrendChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Section 10: Bab el-Mandeb Linkage -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-1">中东双咽喉联动: 霍尔木兹 + 曼德海峡
+                <span class="text-xs text-gray-500 font-normal ml-2">Hormuz + Bab el-Mandeb Dual Monitor</span>
+            </h2>
+            <p class="text-xs text-gray-500 mb-4">胡塞武装 + 霍尔木兹危机的完整中东海运图景</p>
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">霍尔木兹 7日均值</p>
+                    <p id="babHormuz7d" class="stat-value text-xl font-bold text-accent"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">曼德海峡 7日均值</p>
+                    <p id="babMandeb7d" class="stat-value text-xl font-bold text-warning"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">双咽喉合计</p>
+                    <p id="babCombined7d" class="stat-value text-xl font-bold text-white"><span class="spinner"></span></p>
+                </div>
+                <div class="bg-gray-800/40 rounded-lg p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">曼德海峡油轮占比</p>
+                    <p id="babTankerPct" class="stat-value text-xl font-bold text-warning"><span class="spinner"></span></p>
+                </div>
+            </div>
+            <div class="relative" style="height:300px;">
+                <canvas id="babChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Section 12: Commodity Dependency -->
+        <section class="card p-5">
+            <h2 class="text-base font-semibold text-white mb-4">霍尔木兹海峡关键商品依赖度
+                <span class="text-xs text-gray-500 font-normal ml-2">Critical Commodity Dependency</span>
+            </h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                    <p class="text-xs text-gray-400 mb-3 uppercase tracking-wider">全球过境占比</p>
+                    <div class="relative" style="height:260px;">
+                        <canvas id="commodityChart"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400 mb-3 uppercase tracking-wider">主要依赖国石油依赖度</p>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700/50">
+                                    <th class="text-left py-2 px-3 text-gray-400 font-medium">国家/地区</th>
+                                    <th class="text-right py-2 px-3 text-gray-400 font-medium">石油依赖度</th>
+                                    <th class="text-left py-2 px-3 text-gray-400 font-medium w-40">占比</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dependencyTable">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-gray-700/50 mt-8">
+        <div class="max-w-7xl mx-auto px-4 py-6 sm:px-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <p class="text-sm text-gray-400 font-medium">Prepared by <span class="text-white">Quantechpro Labs</span></p>
+                <p class="text-xs text-gray-600">&copy; 2026 Quantechpro Labs. All rights reserved.</p>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">
+                数据来源:
+                <a href="https://portwatch.imf.org" target="_blank" class="text-accent hover:underline">IMF PortWatch</a>,
+                <a href="https://www.tradingview.com" target="_blank" class="text-accent hover:underline">TradingView</a>,
+                <a href="https://www.marinetraffic.com" target="_blank" class="text-accent hover:underline">MarineTraffic</a>
+            </p>
+            <p class="text-xs text-gray-600">
+                免责声明：本页面数据仅供参考，不构成任何投资建议。数据可能存在延迟。
+            </p>
+        </div>
+    </footer>
+
+<script>
+    // ── Chart instances ──
+    let transitChartInstance = null;
+    let shipTypeChartInstance = null;
+    let capacityChartInstance = null;
+    let commodityChartInstance = null;
+    let chokepointCompareInstance = null;
+    let yoyChartInstance = null;
+    let shipTypeTrendInstance = null;
+    let babChartInstance = null;
+
+    // Cached chokepoint data for day selector
+    let cachedChokepointData = {};
+
+    // ── Chart.js defaults ──
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.borderColor = '#334155';
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+    // ── Helpers ──
+    function fmtNum(n) {
+        if (n == null || isNaN(n)) return '--';
+        return Number(n).toLocaleString('en-US');
+    }
+    function fmtDate(ts) {
+        const d = new Date(ts);
+        return `${d.getMonth()+1}/${d.getDate()}`;
+    }
+    function fmtDateFull(ts) {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    function setLoading(id) {
+        document.getElementById(id).innerHTML = '<span class="spinner"></span>';
+    }
+    function setError(id) {
+        document.getElementById(id).innerHTML = '<span class="text-danger text-lg">数据加载失败</span>';
+    }
+    function setVal(id, val, suffix) {
+        document.getElementById(id).textContent = val + (suffix || '');
+    }
+
+    // ── Static data: Dependency table ──
+    const dependencyData = [
+        { country: '日本', flag: '🇯🇵', pct: 75 },
+        { country: '韩国', flag: '🇰🇷', pct: 60 },
+        { country: '印度', flag: '🇮🇳', pct: 60 },
+        { country: '中国', flag: '🇨🇳', pct: 40 },
+        { country: '欧盟', flag: '🇪🇺', pct: 15 },
+    ];
+
+    function renderDependencyTable() {
+        const tbody = document.getElementById('dependencyTable');
+        tbody.innerHTML = dependencyData.map(d => `
+            <tr class="border-b border-gray-700/30 hover:bg-gray-800/30 transition-colors">
+                <td class="py-2.5 px-3 font-medium text-white">${d.flag} ${d.country}</td>
+                <td class="py-2.5 px-3 text-right font-mono text-sm ${d.pct >= 60 ? 'text-danger' : d.pct >= 40 ? 'text-warning' : 'text-positive'}">${d.pct}%</td>
+                <td class="py-2.5 px-3">
+                    <div class="w-full bg-gray-700/40 rounded-full h-2">
+                        <div class="h-2 rounded-full transition-all ${d.pct >= 60 ? 'bg-red-500' : d.pct >= 40 ? 'bg-amber-500' : 'bg-green-500'}" style="width:${d.pct}%"></div>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    // ── Static data: Commodity chart ──
+    function renderCommodityChart() {
+        const ctx = document.getElementById('commodityChart').getContext('2d');
+        if (commodityChartInstance) commodityChartInstance.destroy();
+
+        const labels = ['LPG (液化石油气)', 'LNG (液化天然气)', '原油', '化肥原料', '成品油', '石化产品'];
+        const values = [33, 25, 21, 18, 15, 12];
+        const colors = ['#f59e0b', '#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#6366f1'];
+
+        commodityChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: colors.map(c => c + 'cc'),
+                    borderColor: colors,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `全球过境占比: ${ctx.raw}%`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        max: 40,
+                        ticks: { callback: v => v + '%' },
+                        grid: { color: '#334155' }
+                    },
+                    y: {
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+
+    // ── ArcGIS API helper ──
+    const ARCGIS_BASE = 'https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services/Daily_Chokepoints_Data/FeatureServer/0/query';
+
+    function buildApiUrl(portid, count, orderDir = 'DESC') {
+        return ARCGIS_BASE
+            + `?where=portid%3D%27${portid}%27`
+            + '&outFields=*'
+            + `&orderByFields=date+${orderDir}`
+            + `&resultRecordCount=${count}`
+            + '&resultOffset=0&f=json';
+    }
+
+    async function fetchChokepoint(portid, count = 90) {
+        const res = await fetch(buildApiUrl(portid, count));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json.features || json.features.length === 0) throw new Error('No data for ' + portid);
+        return json.features.map(f => f.attributes).sort((a, b) => a.date - b.date);
+    }
+
+    // ── Chokepoint config ──
+    const CHOKEPOINTS = {
+        chokepoint6: { name: '霍尔木兹', color: '#3b82f6' },
+        chokepoint1: { name: '苏伊士', color: '#22c55e' },
+        chokepoint4: { name: '曼德海峡', color: '#f59e0b' },
+        chokepoint5: { name: '马六甲', color: '#a855f7' },
+        chokepoint7: { name: '好望角', color: '#ef4444' },
+    };
+
+    // ── Main data loader ──
+    async function loadData() {
+        const btn = document.getElementById('refreshBtn');
+        btn.disabled = true;
+        btn.classList.add('opacity-60');
+
+        // Set loading states
+        ['metricTotal', 'metricTankerPct', 'metricCapacity', 'metricTankerCount', 'heroTotal'].forEach(setLoading);
+
+        try {
+            // Fetch all data in parallel (90 days each for comparison chart)
+            const [hormuzData, suezData, babData, malaccaData, capeData, hormuzYoyData] = await Promise.all([
+                fetchChokepoint('chokepoint6', 90),
+                fetchChokepoint('chokepoint1', 90),
+                fetchChokepoint('chokepoint4', 90),
+                fetchChokepoint('chokepoint5', 90),
+                fetchChokepoint('chokepoint7', 90),
+                // YoY: use resultOffset to get last year's data (offset by ~365 records = 365 days)
+                (async () => {
+                    const url = ARCGIS_BASE
+                        + `?where=portid%3D%27chokepoint6%27`
+                        + '&outFields=*&orderByFields=date+DESC&resultRecordCount=90&resultOffset=365&f=json';
+                    const res = await fetch(url);
+                    if (!res.ok) return [];
+                    const json = await res.json();
+                    if (!json.features) return [];
+                    return json.features.map(f => f.attributes).sort((a, b) => a.date - b.date);
+                })(),
+            ]);
+
+            // Cache chokepoint data for day selector
+            cachedChokepointData = {
+                chokepoint6: hormuzData,
+                chokepoint1: suezData,
+                chokepoint4: babData,
+                chokepoint5: malaccaData,
+                chokepoint7: capeData,
+            };
+
+            const features = hormuzData;
+            const latest = features[features.length - 1];
+            const last7 = features.slice(-7);
+
+            // ── Metrics ──
+            const avg7 = last7.reduce((s, d) => s + (d.n_total || 0), 0) / last7.length;
+            const avg90 = features.reduce((s, d) => s + (d.n_total || 0), 0) / features.length;
+
+            setVal('metricTotal', fmtNum(Math.round(avg7)));
+
+            const tankerPct = latest.n_total > 0 ? ((latest.n_tanker / latest.n_total) * 100).toFixed(1) : '--';
+            setVal('metricTankerPct', tankerPct, '%');
+
+            setVal('metricCapacity', fmtNum(Math.round(latest.capacity || 0)));
+            setVal('metricTankerCount', fmtNum(latest.n_tanker || 0));
+
+            // ── Hero transit status ──
+            setVal('heroTotal', fmtNum(latest.n_total));
+            setVal('heroHistAvg', fmtNum(Math.round(avg90)) + ' 艘/天');
+
+            const deviation = avg90 > 0 ? ((latest.n_total - avg90) / avg90 * 100).toFixed(1) : 0;
+            const devEl = document.getElementById('heroDeviation');
+            const devNum = parseFloat(deviation);
+            devEl.textContent = (devNum > 0 ? '+' : '') + deviation + '%';
+            devEl.className = 'text-sm font-mono font-semibold ' + (devNum < -50 ? 'text-danger' : devNum < -20 ? 'text-warning' : devNum < 0 ? 'text-yellow-300' : 'text-positive');
+
+            // ── Status badge ──
+            const ratio = avg90 > 0 ? latest.n_total / avg90 : 1;
+            const badge = document.getElementById('statusBadge');
+            const card = document.getElementById('transitStatusCard');
+            let statusText, statusColor, dotColor, borderColor;
+            if (ratio < 0.15) {
+                statusText = '冻结'; statusColor = 'bg-red-900/80 text-red-300'; dotColor = 'bg-red-400'; borderColor = '#ef4444';
+            } else if (ratio < 0.4) {
+                statusText = '严重受阻'; statusColor = 'bg-red-900/60 text-red-300'; dotColor = 'bg-red-400'; borderColor = '#ef4444';
+            } else if (ratio < 0.7) {
+                statusText = '部分受阻'; statusColor = 'bg-amber-900/60 text-amber-300'; dotColor = 'bg-amber-400'; borderColor = '#f59e0b';
+            } else {
+                statusText = '正常通行'; statusColor = 'bg-green-900/60 text-green-300'; dotColor = 'bg-green-400'; borderColor = '#22c55e';
+            }
+            badge.className = `inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${statusColor}`;
+            badge.innerHTML = `<span class="pulse-dot w-2 h-2 rounded-full ${dotColor}"></span>${statusText}`;
+            card.style.borderLeftColor = borderColor;
+
+
+            // ── Transit trend chart ──
+            const labels = features.map(d => fmtDate(d.date));
+            const totalData = features.map(d => d.n_total);
+            const tankerData = features.map(d => d.n_tanker);
+
+            const transitCtx = document.getElementById('transitChart').getContext('2d');
+            if (transitChartInstance) transitChartInstance.destroy();
+
+            transitChartInstance = new Chart(transitCtx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: '总通行量',
+                            data: totalData,
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59,130,246,0.08)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHitRadius: 10,
+                            borderWidth: 2,
+                        },
+                        {
+                            label: '油轮',
+                            data: tankerData,
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245,158,11,0.06)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHitRadius: 10,
+                            borderWidth: 2,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', align: 'end', labels: { boxWidth: 12, padding: 16 } },
+                        tooltip: {
+                            callbacks: {
+                                title: items => {
+                                    const idx = items[0].dataIndex;
+                                    return fmtDateFull(features[idx].date);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { maxTicksLimit: 12, maxRotation: 0 }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            grid: { color: '#1e293b' }
+                        }
+                    }
+                }
+            });
+
+            // ── Ship type doughnut ──
+            const shipCtx = document.getElementById('shipTypeChart').getContext('2d');
+            if (shipTypeChartInstance) shipTypeChartInstance.destroy();
+
+            const shipLabels = ['油轮', '集装箱', '干散货', '杂货', '滚装', '通用货'];
+            const shipValues = [
+                latest.n_tanker || 0,
+                latest.n_container || 0,
+                latest.n_dry_bulk || 0,
+                latest.n_cargo || 0,
+                latest.n_roro || 0,
+                latest.n_general_cargo || 0,
+            ];
+            const shipColors = ['#f59e0b', '#3b82f6', '#22c55e', '#a855f7', '#ef4444', '#6366f1'];
+
+            shipTypeChartInstance = new Chart(shipCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: shipLabels,
+                    datasets: [{
+                        data: shipValues,
+                        backgroundColor: shipColors.map(c => c + 'cc'),
+                        borderColor: shipColors,
+                        borderWidth: 1,
+                        hoverOffset: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '60%',
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { boxWidth: 10, padding: 10, font: { size: 11 } }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => {
+                                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                    const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
+                                    return `${ctx.label}: ${ctx.raw} (${pct}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // ── Capacity area chart ──
+            const capCtx = document.getElementById('capacityChart').getContext('2d');
+            if (capacityChartInstance) capacityChartInstance.destroy();
+
+            capacityChartInstance = new Chart(capCtx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '运力 (DWT)',
+                        data: features.map(d => d.capacity),
+                        borderColor: '#22c55e',
+                        backgroundColor: 'rgba(34,197,94,0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        pointHitRadius: 10,
+                        borderWidth: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                title: items => {
+                                    const idx = items[0].dataIndex;
+                                    return fmtDateFull(features[idx].date);
+                                },
+                                label: ctx => `DWT: ${fmtNum(Math.round(ctx.raw))}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { maxTicksLimit: 10, maxRotation: 0 }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            grid: { color: '#1e293b' },
+                            ticks: {
+                                callback: v => {
+                                    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+                                    if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+                                    return v;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // ══════════════════════════════════════
+            // NEW MODULE 1: Global Chokepoint Comparison
+            // ══════════════════════════════════════
+            renderChokepointCompare(90);
+
+            // ══════════════════════════════════════
+            // NEW MODULE 2: Year-over-Year Comparison
+            // ══════════════════════════════════════
+            const currentLast30 = features.slice(-30);
+            const currentAvg = currentLast30.reduce((s, d) => s + (d.n_total || 0), 0) / currentLast30.length;
+            const currentCapAvg = currentLast30.reduce((s, d) => s + (d.capacity || 0), 0) / currentLast30.length;
+
+            setVal('yoyCurrentAvg', fmtNum(Math.round(currentAvg)));
+
+            if (hormuzYoyData.length > 0) {
+                const lyLast30 = hormuzYoyData.slice(-30);
+                const lyAvg = lyLast30.reduce((s, d) => s + (d.n_total || 0), 0) / lyLast30.length;
+                const lyCapAvg = lyLast30.reduce((s, d) => s + (d.capacity || 0), 0) / lyLast30.length;
+
+                setVal('yoyLastYearAvg', fmtNum(Math.round(lyAvg)));
+
+                const changePct = lyAvg > 0 ? ((currentAvg - lyAvg) / lyAvg * 100).toFixed(1) : '--';
+                const changeEl = document.getElementById('yoyChange');
+                const numChange = parseFloat(changePct);
+                changeEl.textContent = (numChange > 0 ? '+' : '') + changePct + '%';
+                changeEl.className = 'stat-value text-xl font-bold ' + (numChange < -20 ? 'text-danger' : numChange < 0 ? 'text-warning' : 'text-positive');
+
+                const capChangePct = lyCapAvg > 0 ? ((currentCapAvg - lyCapAvg) / lyCapAvg * 100).toFixed(1) : '--';
+                const capChangeEl = document.getElementById('yoyCapChange');
+                const numCapChange = parseFloat(capChangePct);
+                capChangeEl.textContent = (numCapChange > 0 ? '+' : '') + capChangePct + '%';
+                capChangeEl.className = 'stat-value text-xl font-bold ' + (numCapChange < -20 ? 'text-danger' : numCapChange < 0 ? 'text-warning' : 'text-positive');
+
+                // YoY chart: align by day-of-period (not calendar date)
+                const maxLen = Math.max(currentLast30.length, lyLast30.length);
+                const yoyLabels = Array.from({ length: maxLen }, (_, i) => `Day ${i + 1}`);
+
+                const yoyCtx = document.getElementById('yoyChart').getContext('2d');
+                if (yoyChartInstance) yoyChartInstance.destroy();
+
+                yoyChartInstance = new Chart(yoyCtx, {
+                    type: 'line',
+                    data: {
+                        labels: yoyLabels,
+                        datasets: [
+                            {
+                                label: `${new Date().getFullYear()}年`,
+                                data: currentLast30.map(d => d.n_total),
+                                borderColor: '#3b82f6',
+                                backgroundColor: 'rgba(59,130,246,0.08)',
+                                fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10, borderWidth: 2,
+                            },
+                            {
+                                label: `${new Date().getFullYear() - 1}年`,
+                                data: lyLast30.map(d => d.n_total),
+                                borderColor: '#64748b',
+                                backgroundColor: 'rgba(100,116,139,0.06)',
+                                borderDash: [5, 3],
+                                fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10, borderWidth: 2,
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { position: 'top', align: 'end', labels: { boxWidth: 12, padding: 16 } },
+                        },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+                            y: { beginAtZero: false, grid: { color: '#1e293b' } }
+                        }
+                    }
+                });
+            } else {
+                setVal('yoyLastYearAvg', '--');
+                document.getElementById('yoyChange').textContent = '--';
+                document.getElementById('yoyCapChange').textContent = '--';
+            }
+
+            // ══════════════════════════════════════
+            // NEW MODULE 3: Ship Type Stacked Area Trend
+            // ══════════════════════════════════════
+            const stCtx = document.getElementById('shipTypeTrendChart').getContext('2d');
+            if (shipTypeTrendInstance) shipTypeTrendInstance.destroy();
+
+            const shipTypeFields = [
+                { key: 'n_tanker', label: '油轮', color: '#f59e0b' },
+                { key: 'n_container', label: '集装箱', color: '#3b82f6' },
+                { key: 'n_dry_bulk', label: '干散货', color: '#22c55e' },
+                { key: 'n_cargo', label: '杂货', color: '#a855f7' },
+                { key: 'n_roro', label: '滚装', color: '#ef4444' },
+                { key: 'n_general_cargo', label: '通用货', color: '#6366f1' },
+            ];
+
+            shipTypeTrendInstance = new Chart(stCtx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: shipTypeFields.map(f => ({
+                        label: f.label,
+                        data: features.map(d => d[f.key] || 0),
+                        borderColor: f.color,
+                        backgroundColor: f.color + '30',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        pointHitRadius: 10,
+                        borderWidth: 1.5,
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', align: 'end', labels: { boxWidth: 10, padding: 10, font: { size: 10 } } },
+                        tooltip: {
+                            callbacks: {
+                                title: items => {
+                                    const idx = items[0].dataIndex;
+                                    return fmtDateFull(features[idx].date);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 }, stacked: true },
+                        y: { stacked: true, grid: { color: '#1e293b' },
+                            title: { display: true, text: '船只数 (堆叠)', color: '#64748b', font: { size: 11 } }
+                        }
+                    }
+                }
+            });
+
+            // ══════════════════════════════════════
+            // NEW MODULE 4: Bab el-Mandeb Linkage
+            // ══════════════════════════════════════
+            const babFeatures = babData;
+            const babLast7 = babFeatures.slice(-7);
+            const babAvg7 = babLast7.reduce((s, d) => s + (d.n_total || 0), 0) / babLast7.length;
+            const hormuzAvg7 = avg7;
+
+            setVal('babHormuz7d', fmtNum(Math.round(hormuzAvg7)));
+            setVal('babMandeb7d', fmtNum(Math.round(babAvg7)));
+            setVal('babCombined7d', fmtNum(Math.round(hormuzAvg7 + babAvg7)));
+
+            const babLatest = babFeatures[babFeatures.length - 1];
+            const babTankerPctVal = babLatest && babLatest.n_total > 0
+                ? ((babLatest.n_tanker / babLatest.n_total) * 100).toFixed(1) : '--';
+            setVal('babTankerPct', babTankerPctVal, babTankerPctVal !== '--' ? '%' : '');
+
+            // Dual chart: last 90 days of both
+            const babChartLabels = hormuzData.map(d => fmtDate(d.date));
+            // Align bab data to hormuz dates
+            const babDateMap = {};
+            babFeatures.forEach(d => { babDateMap[fmtDate(d.date)] = d.n_total; });
+
+            const babCtx = document.getElementById('babChart').getContext('2d');
+            if (babChartInstance) babChartInstance.destroy();
+
+            babChartInstance = new Chart(babCtx, {
+                type: 'line',
+                data: {
+                    labels: babChartLabels,
+                    datasets: [
+                        {
+                            label: '霍尔木兹',
+                            data: hormuzData.map(d => d.n_total),
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59,130,246,0.08)',
+                            fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10, borderWidth: 2,
+                        },
+                        {
+                            label: '曼德海峡',
+                            data: babChartLabels.map(lbl => babDateMap[lbl] ?? null),
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245,158,11,0.06)',
+                            fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10, borderWidth: 2,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', align: 'end', labels: { boxWidth: 12, padding: 16 } },
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } },
+                        y: { beginAtZero: false, grid: { color: '#1e293b' },
+                            title: { display: true, text: '每日通行量', color: '#64748b', font: { size: 11 } }
+                        }
+                    }
+                }
+            });
+
+            // Update timestamp
+            document.getElementById('lastUpdate').textContent =
+                '最后更新: ' + new Date().toLocaleString('zh-CN', { hour12: false });
+
+        } catch (err) {
+            console.error('Data fetch failed:', err);
+            ['metricTotal', 'metricTankerPct', 'metricCapacity', 'metricTankerCount', 'heroTotal'].forEach(setError);
+        } finally {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60');
+        }
+    }
+
+    // ── Chokepoint comparison renderer (supports day selector) ──
+    function renderChokepointCompare(days) {
+        const refData = (cachedChokepointData.chokepoint6 || []).slice(-days);
+        if (refData.length === 0) return;
+
+        const cmpLabels = refData.map(d => fmtDate(d.date));
+
+        const cmpCtx = document.getElementById('chokepointCompareChart').getContext('2d');
+        if (chokepointCompareInstance) chokepointCompareInstance.destroy();
+
+        const cmpDatasets = Object.entries(CHOKEPOINTS).map(([id, cfg]) => {
+            const srcData = (cachedChokepointData[id] || []).slice(-days);
+            // Build date->value map for alignment
+            const dateMap = {};
+            srcData.forEach(d => { dateMap[fmtDate(d.date)] = d.n_total; });
+            return {
+                label: cfg.name,
+                data: cmpLabels.map(lbl => dateMap[lbl] ?? null),
+                borderColor: cfg.color,
+                backgroundColor: cfg.color + '15',
+                fill: false,
+                tension: 0.3,
+                pointRadius: 0,
+                pointHitRadius: 10,
+                borderWidth: 2,
+            };
+        });
+
+        chokepointCompareInstance = new Chart(cmpCtx, {
+            type: 'line',
+            data: { labels: cmpLabels, datasets: cmpDatasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top', align: 'end', labels: { boxWidth: 12, padding: 12 } },
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } },
+                    y: { beginAtZero: false, grid: { color: '#1e293b' },
+                        title: { display: true, text: '船只数', color: '#64748b', font: { size: 11 } }
+                    }
+                }
+            }
+        });
+
+        // Update button styles
+        document.querySelectorAll('#cmpDayBtns button').forEach(btn => {
+            if (parseInt(btn.dataset.days) === days) {
+                btn.className = 'px-3 py-1 text-xs rounded-md bg-accent text-white';
+            } else {
+                btn.className = 'px-3 py-1 text-xs rounded-md bg-gray-700/50 text-gray-400 hover:bg-gray-600/50 transition-colors';
+            }
+        });
+    }
+
+    // ── TradingView Advanced Chart (oil price section) ──
+    function initTradingView() {
+        const container = document.querySelector('.tradingview-chart-widget .tradingview-widget-container__widget');
+        if (!container) return;
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+        script.async = true;
+        script.textContent = JSON.stringify({
+            autosize: true,
+            symbol: 'TVC:UKOIL',
+            interval: 'D',
+            timezone: 'Asia/Shanghai',
+            theme: 'dark',
+            style: '1',
+            locale: 'zh_CN',
+            hide_top_toolbar: false,
+            hide_legend: false,
+            allow_symbol_change: true,
+            save_image: false,
+            calendar: false,
+            support_host: 'https://www.tradingview.com'
+        });
+        container.appendChild(script);
+    }
+
+    // ── Marine Traffic fallback ──
+    function initMapFallback() {
+        const iframe = document.getElementById('marineFrame');
+        // If iframe fails to load content after timeout, show fallback
+        setTimeout(() => {
+            try {
+                // Cross-origin will throw; if so, assume it loaded
+                if (iframe.contentDocument && iframe.contentDocument.body.innerHTML === '') {
+                    iframe.style.display = 'none';
+                    document.getElementById('mapFallback').style.display = 'flex';
+                }
+            } catch (e) {
+                // Cross-origin: iframe loaded something, keep it visible
+            }
+        }, 8000);
+    }
+
+    // ── Init ──
+    document.addEventListener('DOMContentLoaded', () => {
+        renderDependencyTable();
+        renderCommodityChart();
+        initTradingView();
+        initMapFallback();
+        loadData();
+
+        // Day selector for chokepoint comparison
+        document.getElementById('cmpDayBtns').addEventListener('click', e => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            renderChokepointCompare(parseInt(btn.dataset.days));
+        });
+
+        // Auto-refresh every 30 minutes
+        setInterval(loadData, 30 * 60 * 1000);
+    });
+</script>
+
+</body>
+</html>
